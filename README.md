@@ -1,8 +1,8 @@
 
-  # Chatbot Interface Design
+  # Multi-Anchor Immutable Reasoning Engine v1.0
 
-  This is a code bundle for Chatbot Interface Design. The original project is available at https://www.figma.com/design/R3gCM5qBc0DgEyKfeHCE1U/Chatbot-Interface-Design.
-
+  Built from Figman Make prototype. Backend in Go
+  
   ## Running the code
 
   Run `npm i` to install the dependencies.
