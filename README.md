@@ -46,7 +46,11 @@ MAIRE isn't a wrapper, its a reasoning engine.
 
 ### Star Topology – The De-Bias Nuke (v3.0 – Dropping Next Week)
 
-Pick 4 models? MAIRE spawns **4 parallel, independent reasoning universes**:Chain 1: Grok → Claude → GPT → Gemini → Grok (final) Chain 2: Claude → GPT → Gemini → Grok → Claude (final) Chain 3: GPT → Gemini → Grok → Claude → GPT (final) Chain 4: Gemini → Grok → Claude → GPT → Gemini (final)
+Pick 4 models? MAIRE spawns **4 parallel, independent reasoning universes**:
+Chain 1: Grok → Claude → GPT → Gemini → Grok (final) 
+Chain 2: Claude → GPT → Gemini → Grok → Claude (final) 
+Chain 3: GPT → Gemini → Grok → Claude → GPT (final) 
+Chain 4: Gemini → Grok → Claude → GPT → Gemini (final)
 **The Magic:**
 - **Every model gets first-mover edge *exactly once*** → no framing bias.  
 - **Every model gets last-word power *exactly once*** → no conclusion hijacking.  
