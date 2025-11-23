@@ -1,7 +1,7 @@
 
   # Multi-Anchor Immutable Reasoning Engine v1.0
 
-  Built from Figman Make prototype. Backend in Go
+  Built from Figma Make prototype. Backend in Go
   
   ## Running the code
 
