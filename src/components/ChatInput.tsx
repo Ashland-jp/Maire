@@ -26,7 +26,7 @@ export function ChatInput({ value, onChange, onSend, disabled }: ChatInputProps)
           value={value}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Ask MAIRE anything..."
+          placeholder="Now make 'em kith"
           disabled={disabled}
           className="min-h-[60px] max-h-[200px] resize-none bg-gray-800/40 border-gray-700/50 text-gray-100 placeholder:text-gray-500 focus:border-gray-600 backdrop-blur-sm"
           rows={2}
