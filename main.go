@@ -2,12 +2,15 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -53,9 +56,8 @@ func (p *PacketHeader) Add(dir string, idx int, model, body string) {
 		Model     string
 		Hash      string
 		Time      string
-	}{dir, idx, model, hash, time.Now().Format(time.RFC3339)})
+	}{Direction: dir, Index: idx, Model: model, Hash: hash, Time: time.Now().Format(time.RFC3339)})
 }
-
 func (p *PacketHeader) Build() string {
 	var b strings.Builder
 	b.WriteString("<LEDGER>\nOriginal: " + p.OriginalPrompt + "\n\n")
@@ -66,14 +68,151 @@ func (p *PacketHeader) Build() string {
 	return b.String()
 }
 
-// ── Model Call (stub) ───────────────────────────
+// ── Real LLM Calls (OpenRouter, Hugging Face, Google Gemini) ─────
+type Message struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type LLMRequest struct {
+	Model     string    `json:"model"`
+	Messages  []Message `json:"messages"`
+	MaxTokens int       `json:"max_tokens,omitempty"`
+}
+
+type LLMResponse struct {
+	Choices []struct {
+		Message Message `json:"message"`
+	} `json:"choices"`
+	Candidates []struct {
+		Content struct {
+			Parts []struct {
+				Text string `json:"text"`
+			} `json:"parts"`
+		} `json:"content"`
+	} `json:"candidates"`
+}
+
 func Call(model, prompt string) string {
-	time.Sleep(200 * time.Millisecond)
-	short := prompt
-	if len(short) > 140 {
-		short = short[:140] + "…"
+	openrouterKey := os.Getenv("OPENROUTER_API_KEY")
+	hfKey := os.Getenv("HF_API_KEY")
+	googleKey := os.Getenv("GOOGLE_API_KEY")
+
+	// If no keys, use stub
+	if openrouterKey == "" && hfKey == "" && googleKey == "" {
+		return CallStub(model, prompt)
 	}
-	return fmt.Sprintf("[%s]\n%s", model, short)
+
+	// All APIs use the same message format
+	reqBody := LLMRequest{
+		Model:     getModelForAPI(model),
+		Messages:  []Message{{Role: "user", Content: prompt}},
+		MaxTokens: 600,
+	}
+	jsonBody, _ := json.Marshal(reqBody)
+
+	// ── 1. OpenRouter (Llama 3.1 8B) → for "grok" ──
+	if strings.HasPrefix(strings.ToLower(model), "grok") || strings.HasPrefix(strings.ToLower(model), "llama") {
+		if openrouterKey == "" {
+			return fmt.Sprintf("[%s] Missing OPENROUTER_API_KEY", model)
+		}
+		httpReq, _ := http.NewRequest("POST", "https://openrouter.ai/api/v1/chat/completions", bytes.NewBuffer(jsonBody))
+		httpReq.Header.Set("Authorization", "Bearer "+openrouterKey)
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("HTTP-Referer", "http://localhost:5173") // Required by OpenRouter
+		httpReq.Header.Set("X-Title", "MAIRE")
+
+		client := &http.Client{Timeout: 60 * time.Second}
+		resp, err := client.Do(httpReq)
+		if err != nil || resp.StatusCode != 200 {
+			return fmt.Sprintf("[%s] OpenRouter error: %v", model, err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		var apiResp LLMResponse
+		json.Unmarshal(body, &apiResp)
+		if len(apiResp.Choices) > 0 {
+			return apiResp.Choices[0].Message.Content
+		}
+		return string(body)
+	}
+
+	// ── 2. Hugging Face → for "claude" ──
+	if strings.Contains(strings.ToLower(model), "claude") || strings.Contains(strings.ToLower(model), "mistral") {
+		if hfKey == "" {
+			return fmt.Sprintf("[%s] Missing HF_API_KEY", model)
+		}
+		url := "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.3"
+		httpReq, _ := http.NewRequest("POST", url, bytes.NewBuffer(jsonBody))
+		httpReq.Header.Set("Authorization", "Bearer "+hfKey)
+
+		client := &http.Client{Timeout: 60 * time.Second}
+		resp, err := client.Do(httpReq)
+		if err != nil {
+			return fmt.Sprintf("[%s] HF error: %v", model, err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		var apiResp []struct{ GeneratedText string `json:"generated_text"` }
+		json.Unmarshal(body, &apiResp)
+		if len(apiResp) > 0 {
+			return apiResp[0].GeneratedText
+		}
+		return string(body)
+	}
+
+	// ── 3. Google Gemini 1.5 Flash → for "gpt" ──
+	if strings.Contains(strings.ToLower(model), "gpt") || strings.Contains(strings.ToLower(model), "gemini") {
+		if googleKey == "" {
+			return fmt.Sprintf("[%s] Missing GOOGLE_API_KEY", model)
+		}
+		geminiBody := map[string]interface{}{
+			"contents": []map[string]interface{}{
+				{"parts": []map[string]string{{"text": prompt}}},
+			},
+		}
+		jsonBody, _ := json.Marshal(geminiBody)
+		url := "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" + googleKey
+
+		httpReq, _ := http.NewRequest("POST", url, bytes.NewBuffer(jsonBody))
+		httpReq.Header.Set("Content-Type", "application/json")
+
+		client := &http.Client{Timeout: 60 * time.Second}
+		resp, err := client.Do(httpReq)
+		if err != nil {
+			return fmt.Sprintf("[%s] Gemini error: %v", model, err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		var apiResp LLMResponse
+		json.Unmarshal(body, &apiResp)
+		if len(apiResp.Candidates) > 0 && len(apiResp.Candidates[0].Content.Parts) > 0 {
+			return apiResp.Candidates[0].Content.Parts[0].Text
+		}
+		return string(body)
+	}
+
+	return CallStub(model, prompt)
+}
+
+func getModelForAPI(model string) string {
+	lower := strings.ToLower(model)
+	if strings.Contains(lower, "grok") || strings.Contains(lower, "llama") {
+		return "meta-llama/llama-3.1-8b-instruct"
+	}
+	if strings.Contains(lower, "claude") {
+		return "mistralai/Mistral-7B-Instruct-v0.3"
+	}
+	return "gemini-1.5-flash"
+}
+
+func CallStub(model, prompt string) string {
+	time.Sleep(180 * time.Millisecond)
+	short := prompt
+	if len(short) > 120 {
+		short = short[:120] + "…"
+	}
+	return fmt.Sprintf("[%s - local stub]\n%s", model, short)
 }
 
 // ── Topologies ───────────────────────────────────
@@ -81,7 +220,7 @@ func standardChain(prompt string, models []string) (string, []Layer) {
 	l := &PacketHeader{OriginalPrompt: prompt}
 	var stack []Layer
 	for i, m := range models {
-		p := l.Build() + "\n\n→ " + m + "\nImprove the reasoning."
+		p := l.Build() + "\n\n→ " + m + "\nContinue and improve:"
 		resp := Call(m, p)
 		l.Add("F", i, m, resp)
 		stack = append(stack, Layer{Model: m, Response: resp})
@@ -99,7 +238,7 @@ func doubleHelix(prompt string, models []string) (string, []Layer) {
 	go func() {
 		defer wg.Done()
 		for i, m := range models {
-			p := l.Build() + "\n\n[Forward] You are " + m
+			p := l.Build() + "\n\n[Forward pass] You are " + m
 			resp := Call(m, p)
 			mu.Lock()
 			l.Add("F", i, m, resp)
@@ -112,7 +251,7 @@ func doubleHelix(prompt string, models []string) (string, []Layer) {
 		defer wg.Done()
 		for i := len(models) - 1; i >= 0; i-- {
 			m := models[i]
-			p := l.Build() + "\n\n[Reverse] You are " + m
+			p := l.Build() + "\n\n[Reverse pass] Critique as " + m
 			resp := Call(m, p)
 			mu.Lock()
 			l.Add("R", i, m, resp)
@@ -150,13 +289,13 @@ func starTopology(prompt string, models []string) (string, []Layer) {
 		}(i, m)
 	}
 	wg.Wait()
-	return fmt.Sprintf("Star Topology — %d arms × %d steps", len(models), steps), stack
+	return fmt.Sprintf("Star Topology — %d independent chains", len(models)), stack
 }
 
 // ── HTTP Handler ─────────────────────────────────
 func handler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
-		http.Error(w, "POST only",http.StatusMethodNotAllowed)
+		http.Error(w, "POST only", 405)
 		return
 	}
 	var in req
@@ -166,6 +305,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(in.Models) == 0 {
 		http.Error(w, "no models", 400)
+		return
 	}
 
 	var final string
@@ -188,9 +328,9 @@ func handler(w http.ResponseWriter, r *http.Request) {
 func main() {
 	http.HandleFunc("/maire/run", handler)
 	fmt.Println("")
-	fmt.Println("MAIRE backend is LIVE")
+	fmt.Println("MAIRE backend LIVE")
 	fmt.Println("→ http://localhost:8080/maire/run")
-	fmt.Println("Topologies ready: standard-chain | double-helix | star-topology")
+	fmt.Println("Free LLMs ready: OpenRouter (grok), Hugging Face (claude), Gemini (gpt)")
 	fmt.Println("")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
