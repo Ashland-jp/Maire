@@ -2,14 +2,7 @@ import { useState } from 'react';
 import { ChatInterface } from './components/ChatInterface';
 import { ConfigPanel } from './components/ConfigPanel';
 import { Header } from './components/Header';
-
-export type Topology = 'standard-chain' | 'double-helix' | 'star-topology';
-
-export interface LLMModel {
-  id: string;
-  name: string;
-  enabled: boolean;
-}
+import type { Topology, LLMModel } from './components/ConfigPanel';
 
 export interface Message {
   id: string;
@@ -28,8 +21,6 @@ export default function App() {
     { id: 'grok', name: 'Grok', enabled: true },
     { id: 'claude', name: 'Claude', enabled: true },
     { id: 'gpt-4', name: 'GPT-4', enabled: true },
-    { id: 'gemini', name: 'Gemini', enabled: false },
-    { id: 'llama', name: 'Llama', enabled: false },
   ]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [isConfigOpen, setIsConfigOpen] = useState(true);
@@ -48,7 +39,6 @@ export default function App() {
     const enabledModels = models.filter((m) => m.enabled).map((m) => m.id);
     
     try {
-      // TODO: Replace with actual backend endpoint
       const response = await fetch('/maire/run', {
         method: 'POST',
         headers: {
@@ -60,6 +50,10 @@ export default function App() {
           models: enabledModels,
         }),
       });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
 
       const data = await response.json();
 
@@ -73,21 +67,17 @@ export default function App() {
 
       setMessages((prev) => [...prev, assistantMessage]);
     } catch (error) {
-      // Mock response for development
-      const mockHeaderStack = enabledModels.map((model) => ({
-        model,
-        response: `[${model}] Analysis of: "${content}"`,
-      }));
-
-      const assistantMessage: Message = {
+      console.error('Error calling MAIRE backend:', error);
+      
+      // Show error message to user
+      const errorMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        content: `Based on ${topology} reasoning with ${enabledModels.length} models, here's the synthesized response.`,
+        content: `Error: Unable to connect to MAIRE backend. Make sure the Go server is running on port 8080.\n\nError details: ${error}`,
         timestamp: new Date(),
-        headerStack: mockHeaderStack,
       };
 
-      setMessages((prev) => [...prev, assistantMessage]);
+      setMessages((prev) => [...prev, errorMessage]);
     }
   };
 
